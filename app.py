@@ -1,0 +1,305 @@
+import os
+import torch
+import torch.nn as nn
+from torchvision import models, transforms
+from PIL import Image
+import streamlit as st
+
+# ============================================================
+# Animal Image Classifier - Streamlit Frontend
+# Works with the checkpoint produced by Cell 16.
+# ============================================================
+
+st.set_page_config(
+    page_title="Animal Vision AI",
+    page_icon="🐾",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ------------------------- CSS ------------------------------
+st.markdown("""
+<style>
+    .stApp {
+        background: linear-gradient(135deg, #0b1020 0%, #111827 55%, #172554 100%);
+        color: #f8fafc;
+    }
+
+    .block-container {
+        max-width: 1180px;
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+    }
+
+    .hero {
+        padding: 2.2rem 2rem;
+        border: 1px solid rgba(255,255,255,.10);
+        border-radius: 24px;
+        background: linear-gradient(135deg, rgba(59,130,246,.20), rgba(124,58,237,.16));
+        box-shadow: 0 18px 60px rgba(0,0,0,.25);
+        margin-bottom: 1.5rem;
+    }
+
+    .hero h1 {
+        font-size: 3rem;
+        margin: 0;
+        font-weight: 800;
+        letter-spacing: -1px;
+    }
+
+    .hero p {
+        color: #cbd5e1;
+        font-size: 1.08rem;
+        margin-top: .7rem;
+    }
+
+    .card {
+        background: rgba(15,23,42,.72);
+        border: 1px solid rgba(255,255,255,.09);
+        border-radius: 20px;
+        padding: 1.25rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 10px 35px rgba(0,0,0,.18);
+    }
+
+    .result-title {
+        color: #94a3b8;
+        font-size: .9rem;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        margin-bottom: .35rem;
+    }
+
+    .result-animal {
+        font-size: 2.1rem;
+        font-weight: 800;
+        color: #f8fafc;
+        margin-bottom: .2rem;
+    }
+
+    .confidence {
+        font-size: 1.45rem;
+        font-weight: 700;
+        color: #60a5fa;
+    }
+
+    .small {
+        color: #94a3b8;
+        font-size: .9rem;
+    }
+
+    div[data-testid="stFileUploader"] {
+        background: rgba(15,23,42,.65);
+        border: 1px dashed rgba(96,165,250,.55);
+        border-radius: 18px;
+        padding: .5rem;
+    }
+
+    .footer {
+        text-align: center;
+        color: #64748b;
+        margin-top: 2rem;
+        font-size: .85rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------------- Configuration -----------------------
+CHECKPOINT_PATH = os.getenv(
+    "MODEL_PATH",
+    "best_animal_classifier.pth"
+)
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+predict_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
+
+# ---------------------- Model loading ------------------------
+@st.cache_resource
+def load_model(checkpoint_path):
+    if not os.path.exists(checkpoint_path):
+        return None, (
+            f"Model checkpoint not found: `{checkpoint_path}`. "
+            "Put `best_animal_classifier.pth` in the same folder as app.py "
+            "or set MODEL_PATH to its location."
+        )
+
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location=DEVICE,
+        weights_only=False
+    )
+
+    classes = checkpoint["classes"]
+    num_classes = checkpoint.get("num_classes", len(classes))
+
+    model = models.resnet50(weights=None)
+
+    model.fc = nn.Sequential(
+        nn.Dropout(0.4),
+        nn.Linear(model.fc.in_features, num_classes)
+    )
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model = model.to(DEVICE)
+    model.eval()
+
+    return model, classes
+
+
+model, classes_or_error = load_model(CHECKPOINT_PATH)
+
+if model is None:
+    classes = []
+    model_error = classes_or_error
+else:
+    classes = classes_or_error
+    model_error = None
+
+# -------------------------- Header ---------------------------
+st.markdown("""
+<div class="hero">
+    <h1>🐾 Animal Vision AI</h1>
+    <p>Upload an animal image and let the trained ResNet50 model identify it.</p>
+</div>
+""", unsafe_allow_html=True)
+
+# -------------------------- Sidebar --------------------------
+with st.sidebar:
+    st.markdown("## ⚙️ Model Info")
+    st.write("**Architecture:** ResNet50")
+    st.write("**Input size:** 224 × 224")
+    st.write(f"**Classes:** {len(classes) if classes else 'Unknown'}")
+    st.write(f"**Device:** {DEVICE}")
+
+    st.divider()
+    st.markdown("### 📌 How it works")
+    st.write("1. Upload an image")
+    st.write("2. Image is normalized")
+    st.write("3. ResNet50 predicts the class")
+    st.write("4. Softmax gives confidence")
+    st.write("5. Top predictions are displayed")
+
+# ---------------------- Missing model ------------------------
+if model_error:
+    st.error(model_error)
+    st.info(
+        "Download the `best_animal_classifier.pth` file generated by "
+        "Cell 16 from Colab and place it beside `app.py`."
+    )
+    st.stop()
+
+# -------------------------- Upload ---------------------------
+left, right = st.columns([1.05, 1], gap="large")
+
+with left:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### 📤 Upload an animal image")
+
+    uploaded_file = st.file_uploader(
+        "Choose JPG, JPEG, PNG or WEBP",
+        type=["jpg", "jpeg", "png", "webp"],
+        label_visibility="collapsed"
+    )
+
+    st.markdown(
+        '<p class="small">For best results, use a clear image where the animal is visible.</p>',
+        unsafe_allow_html=True
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with right:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### 🧠 Prediction")
+
+    if uploaded_file is None:
+        st.info("Upload an image to start prediction.")
+    else:
+        image = Image.open(uploaded_file).convert("RGB")
+        st.image(image, caption="Uploaded image", use_container_width=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ------------------------- Prediction ------------------------
+if uploaded_file is not None:
+    image = Image.open(uploaded_file).convert("RGB")
+    image_tensor = predict_transform(image).unsqueeze(0).to(DEVICE)
+
+    with st.spinner("Analyzing image..."):
+        with torch.no_grad():
+            output = model(image_tensor)
+            probabilities = torch.softmax(output, dim=1)
+
+    top_k = min(5, len(classes))
+    top_probs, top_indices = torch.topk(probabilities, k=top_k, dim=1)
+
+    best_confidence = float(top_probs[0, 0].item())
+    best_index = int(top_indices[0, 0].item())
+    best_class = classes[best_index]
+
+    st.markdown("## 🎯 Result")
+
+    r1, r2, r3 = st.columns(3)
+
+    with r1:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="result-title">Predicted animal</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="result-animal">{best_class}</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with r2:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="result-title">Confidence</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="confidence">{best_confidence * 100:.2f}%</div>',
+            unsafe_allow_html=True
+        )
+        st.progress(best_confidence)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with r3:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="result-title">Model</div>', unsafe_allow_html=True)
+        st.markdown('<div class="result-animal">ResNet50</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="small">Transfer learning classifier</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # Confidence interpretation
+    if best_confidence >= 0.80:
+        st.success("High-confidence prediction.")
+    elif best_confidence >= 0.50:
+        st.warning("Moderate-confidence prediction. The image may contain visual ambiguity.")
+    else:
+        st.warning(
+            "Low-confidence prediction. The model is uncertain; try a clearer image "
+            "or improve the training dataset/model."
+        )
+
+    # Top predictions
+    st.markdown("### 📊 Top predictions")
+
+    for rank in range(top_k):
+        cls = classes[int(top_indices[0, rank].item())]
+        prob = float(top_probs[0, rank].item())
+
+        c1, c2 = st.columns([2.5, 1])
+        with c1:
+            st.write(f"**{rank + 1}. {cls}**")
+            st.progress(prob)
+        with c2:
+            st.write(f"**{prob * 100:.2f}%**")
+
+st.markdown(
+    '<div class="footer">Animal Vision AI • ResNet50 • PyTorch</div>',
+    unsafe_allow_html=True
+)
